@@ -1,0 +1,88 @@
+#!/bin/bash
+
+indent() {
+  sed -u 's/^/       /'
+}
+
+echo "-----> Install ImageMagick"
+
+BUILD_DIR=$1
+CACHE_DIR=$2
+VENDOR_DIR="$BUILD_DIR/vendor"
+INSTALL_DIR="$VENDOR_DIR/imagemagick"
+IMAGE_MAGICK_VERSION="${IMAGE_MAGICK_VERSION:-7.0.5-10}"
+CACHE_FILE="$CACHE_DIR/imagemagick-$IMAGE_MAGICK_VERSION.tar.gz"
+
+if [ ! -f $CACHE_FILE ]; then
+  # install imagemagick
+  IMAGE_MAGICK_FILE="ImageMagick-$IMAGE_MAGICK_VERSION.tar.xz"
+  IMAGE_MAGICK_DIR="ImageMagick-$IMAGE_MAGICK_VERSION"
+  IMAGE_MAGICK_URL="https://www.imagemagick.org/download/releases/$IMAGE_MAGICK_FILE"
+
+  echo "-----> Downloading ImageMagick from $IMAGE_MAGICK_URL"
+  wget $IMAGE_MAGICK_URL -P $BUILD_DIR | indent
+
+  echo "-----> Extracting ImageMagick from $BUILD_DIR/$IMAGE_MAGICK_FILE"
+  if [ ! -f $BUILD_DIR/$IMAGE_MAGICK_FILE ]; then
+    echo "Error: Unable to download ImageMagick" | indent
+    ls $BUILD_DIR | indent
+    exit 1;
+  fi
+  tar xvf $BUILD_DIR/$IMAGE_MAGICK_FILE | indent
+
+  echo "-----> Building ImageMagick"
+  cd $IMAGE_MAGICK_DIR
+  export CPPFLAGS="-I$INSTALL_DIR/include"
+  export LDFLAGS="-L$INSTALL_DIR/lib"
+  ./configure --prefix=$INSTALL_DIR
+  make && make install
+  cd ..
+  rm -rf $IMAGE_MAGICK_DIR
+
+  # cache for future deploys
+  echo "-----> Caching ImageMagick installation"
+  cd $VENDOR_DIR
+  REL_INSTALL_DIR="imagemagick"
+  tar czf $REL_INSTALL_DIR.tar.gz $REL_INSTALL_DIR
+
+  if [ ! -d $CACHE_DIR ]; then
+    mkdir -p $CACHE_DIR
+  fi
+
+  mv $REL_INSTALL_DIR.tar.gz $CACHE_FILE
+
+else
+  # cache exists, extract it
+  echo "-----> Extracting ImageMagick $CACHE_FILE => $VENDOR_DIR"
+  mkdir -p $VENDOR_DIR
+  tar xzf $CACHE_FILE -C $VENDOR_DIR
+fi
+
+echo "-----> Writing policy file"
+mkdir -p $INSTALL_DIR/etc/ImageMagick
+cat > $INSTALL_DIR/policy.xml <<EOF
+<policymap>
+  <policy domain="coder" rights="none" pattern="EPHEMERAL" />
+  <policy domain="coder" rights="none" pattern="HTTPS" />
+  <policy domain="coder" rights="none" pattern="MVG" />
+  <policy domain="coder" rights="none" pattern="MSL" />
+</policymap>
+EOF
+
+echo "-----> Writing config file"
+cat > $INSTALL_DIR/magic.xml <<EOF
+<magicmap>
+ <magic name="JPEG" offset="0" target="\377\330\377"/> 
+ <magic name="PNG" offset="0" target="\211PNG\r\n\032\n"/> 
+</magicmap>
+EOF
+
+# update PATH and LD_LIBRARY_PATH
+echo "-----> Updating environment variables"
+PROFILE_PATH="$BUILD_DIR/.profile.d/imagemagick.sh"
+ACTUAL_INSTALL_PATH="$HOME/vendor/imagemagick"
+mkdir -p $(dirname $PROFILE_PATH)
+echo "export PATH=$ACTUAL_INSTALL_PATH/bin:\$PATH" >> $PROFILE_PATH
+echo "export LD_LIBRARY_PATH=$ACTUAL_INSTALL_PATH/lib:\$LD_LIBRARY_PATH:/usr/local/lib" >> $PROFILE_PATH
+echo "export MAGICK_CONFIGURE_PATH=$ACTUAL_INSTALL_PATH" >> $PROFILE_PATH
+echo "-----> Done updating environment variables. All set for ImageMagick."
